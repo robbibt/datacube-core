@@ -2,6 +2,11 @@ FROM ubuntu:18.04
 # This Dockerfile should follow the Travis configuration process
 # available here: https://github.com/opendatacube/datacube-core/blob/develop/.travis.yml
 
+# For CVE-2018-16864 and CVE-2018-16865
+# https://usn.ubuntu.com/3855-1/
+RUN apt-get update && apt-get install -y \
+    libsystemd0
+
 # First add the NextGIS repo
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
