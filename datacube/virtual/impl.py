@@ -124,6 +124,40 @@ class Transformation(ABC):
         """
         pass
 
+class Aggregation(ABC):
+    """
+    A user-defined on-the-fly time reduction.
+
+    The data coming in and out of the `compute` method are `xarray.Dataset` objects.
+    The measurements are stored as `xarray.DataArray` objects inside it.
+
+    The `measurements` method transforms the dictionary mapping measurement names
+    to `datacube.model.Measurement` objects describing the input data
+    into a dictionary describing the measurements of the output data
+    produced by the `compute` method.
+
+    The input `xarrage.DataArray` with dimension (time, x, y) will be reduced in time
+    with the output `xarrag.DataArray` being (1, x, y).
+    """
+
+    @abstractmethod
+    def measurements(self, input_measurements) -> Dict[str, Measurement]:
+        """
+        Returns the dictionary describing the output measurements from this
+        aggregation/reduction.
+
+        Assumes the `data` provided to `compute` will have measurements
+        given by the dictionary `input_measurements`.
+        """
+        pass
+
+    @abstractmethod
+    def compute(self, data):
+        """
+        Perform computation on `data` that results in an `xarray.Dataset`
+        having measurements reported by the `measurements` method.
+        """
+        pass
 
 class VirtualProduct(Mapping):
     """
@@ -181,6 +215,21 @@ class VirtualProduct(Mapping):
         return cast(Transformation, obj)
 
     @property
+    def _aggregation(self) -> Aggregation:
+        """ The `Aggregation` object associated with a aggregate product. """
+        cls = self['aggregate']
+
+        try:
+            obj = cls(**{key: value for key, value in self.items() if key not in ['aggregate', 'input']})
+        except TypeError:
+            raise VirtualProductException("aggregation {} could not be instantiated".format(cls))
+
+        self._assert(isinstance(obj, Aggregation), "not a transformation object: {}".format(obj))
+
+        return cast(Aggregation, obj)
+
+
+    @property
     def _input(self) -> 'VirtualProduct':
         """ The input product of a transform product. """
         return VirtualProduct(self['input'])
@@ -205,7 +254,7 @@ class VirtualProduct(Mapping):
     @property
     def _kind(self):
         """ One of product, transform, collate, or juxtapose. """
-        candidates = [key for key in list(self) if key in ['product', 'transform', 'collate', 'juxtapose']]
+        candidates = [key for key in list(self) if key in ['product', 'transform', 'aggregate', 'collate', 'juxtapose']]
         self._assert(len(candidates) == 1, "ambiguous kind")
         return candidates[0]
 
@@ -239,6 +288,11 @@ class VirtualProduct(Mapping):
             input_measurements = self._input.output_measurements(product_definitions)
 
             return self._transformation.measurements(input_measurements)
+
+        elif 'aggregate' in self:
+            input_measurements = self._input.output_measurements(product_definitions)
+
+            return self._aggregation.measurements(input_measurements)
 
         elif 'collate' in self:
             input_measurement_list = [child.output_measurements(product_definitions)
@@ -308,6 +362,9 @@ class VirtualProduct(Mapping):
         elif 'transform' in self:
             return self._input.query(dc, **search_terms)
 
+        elif 'aggregate' in self:
+            return self._input.query(dc, **search_terms)
+
         elif 'collate' in self or 'juxtapose' in self:
             result = [child.query(dc, **search_terms)
                       for child in self._children]
@@ -357,6 +414,9 @@ class VirtualProduct(Mapping):
                                datasets.product_definitions)
 
         elif 'transform' in self:
+            return self._input.group(datasets, **search_terms)
+
+        elif 'aggregate' in self:
             return self._input.group(datasets, **search_terms)
 
         elif 'collate' in self:
@@ -426,6 +486,9 @@ class VirtualProduct(Mapping):
 
         elif 'transform' in self:
             return self._transformation.compute(self._input.fetch(grouped, **load_settings))
+
+        elif 'aggregate' in self:
+            return self._aggregation.compute(self._input.fetch(grouped, **load_settings))
 
         elif 'collate' in self:
             def is_from(source_index):
@@ -500,6 +563,11 @@ class VirtualProduct(Mapping):
                 input_product = reconstruct(product['input'])
                 return dict(transform=qualified_name(product['transform']),
                             input=input_product, **reject_keys(product, ['input', 'transform']))
+
+            if 'aggregate' in product:
+                input_product = reconstruct(product['input'])
+                return dict(transform=qualified_name(product['aggregate']),
+                            input=input_product, **reject_keys(product, ['input', 'aggregate']))
 
             if 'collate' in product:
                 children = [reconstruct(child) for child in product['collate']]

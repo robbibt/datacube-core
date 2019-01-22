@@ -2,6 +2,7 @@ from typing import Mapping, Any
 
 from .impl import VirtualProduct, Transformation, VirtualProductException
 from .transformations import MakeMask, ApplyMask, ToFloat, Rename, Select
+from .aggregation import Percentile
 from .utils import reject_keys
 
 from datacube.model import Measurement
@@ -22,7 +23,7 @@ class NameResolver:
 
         get = recipe.get
 
-        kind_keys = {key for key in recipe if key in ['product', 'transform', 'collate', 'juxtapose']}
+        kind_keys = {key for key in recipe if key in ['product', 'transform', 'aggregate', 'collate', 'juxtapose']}
         if len(kind_keys) < 1:
             raise VirtualProductException("virtual product kind not specified in {}".format(recipe))
         elif len(kind_keys) > 1:
@@ -71,6 +72,34 @@ class NameResolver:
             return VirtualProduct(dict(transform=resolve_transform(cls_name), input=self.construct(**input_product),
                                        **reject_keys(recipe, ['transform', 'input'])))
 
+        if 'aggregate' in recipe:
+            def resolve_aggregate(cls_name):
+                if callable(cls_name):
+                    return cls_name
+
+                if cls_name in self.lookup_table:
+                    cls = self.lookup_table[cls_name]
+                else:
+                    try:
+                        cls = import_function(cls_name)
+                    except (ImportError, AttributeError):
+                        msg = "could not resolve aggregation {} in {}".format(cls_name, recipe)
+                        raise VirtualProductException(msg)
+
+                if not callable(cls):
+                    raise VirtualProductException("aggregation not callable in {}".format(recipe))
+
+                return cls
+
+            cls_name = recipe['aggregate']
+            input_product = get('input')
+
+            if input_product is None:
+                raise VirtualProductException("no input for aggregation in {}".format(recipe))
+
+            return VirtualProduct(dict(aggregate=resolve_aggregate(cls_name), input=self.construct(**input_product),
+                                       **reject_keys(recipe, ['aggregate', 'input'])))
+
         if 'collate' in recipe:
             if len(recipe['collate']) < 1:
                 raise VirtualProductException("no children for collate in {}".format(recipe))
@@ -88,11 +117,14 @@ class NameResolver:
         raise VirtualProductException("could not understand virtual product recipe: {}".format(recipe))
 
 
+# don't know if it's a good idea to keep lookup table
+# it can be hundreds of lines long
 DEFAULT_RESOLVER = NameResolver(make_mask=MakeMask,
                                 apply_mask=ApplyMask,
                                 to_float=ToFloat,
                                 rename=Rename,
-                                select=Select)
+                                select=Select, 
+                                percentile=Percentile)
 
 
 def construct(**recipe: Mapping[str, Any]) -> VirtualProduct:
