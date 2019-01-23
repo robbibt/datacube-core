@@ -224,7 +224,7 @@ class VirtualProduct(Mapping):
         except TypeError:
             raise VirtualProductException("aggregation {} could not be instantiated".format(cls))
 
-        self._assert(isinstance(obj, Aggregation), "not a transformation object: {}".format(obj))
+        self._assert(isinstance(obj, Aggregation), "not a aggregation object: {}".format(obj))
 
         return cast(Aggregation, obj)
 
@@ -566,7 +566,7 @@ class VirtualProduct(Mapping):
 
             if 'aggregate' in product:
                 input_product = reconstruct(product['input'])
-                return dict(transform=qualified_name(product['aggregate']),
+                return dict(aggregate=qualified_name(product['aggregate']),
                             input=input_product, **reject_keys(product, ['input', 'aggregate']))
 
             if 'collate' in product:

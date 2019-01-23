@@ -4,7 +4,7 @@ import numpy as np
 from collections import Sequence
 from functools import partial
 from .impl import VirtualProductException, Aggregation, Measurement
-from .stat_funcs import argpercentile, anynan
+from .stat_funcs import argpercentile, anynan, axisindex
 
 class Percentile(Aggregation):
     """
@@ -19,8 +19,7 @@ class Percentile(Aggregation):
     """
 
     def __init__(self, q,
-                 minimum_valid_observations=0,
-                 per_pixel_metadata=None):
+                 minimum_valid_observations=0):
 
         if isinstance(q, Sequence):
             self.qs = q
@@ -32,28 +31,36 @@ class Percentile(Aggregation):
     def compute(self, data):
         # calculate masks for pixel without enough data
         for var in data.data_vars:
-            nodata = getattr(var, 'nodata', -1)
-            data[var] = data[var].where(data[var] > nodata)
+            nodata = getattr(data[var], 'nodata', None)
+            if nodata is not None:
+                data[var] = data[var].where(data[var] > nodata)
         not_enough  = data.count(dim='time') < self.minimum_valid_observations
 
         def single(q):
             stat_func = partial(xarray.Dataset.reduce, dim='time', keep_attrs=True,
                                 func=argpercentile, q=q)
+            result = stat_func(data)
 
-            renamed = data.rename({var: var + '_PC_' + str(q)
-                                    for var in data.data_vars})
-            result = stat_func(renamed)
+            def index_dataset(var): 
+                return axisindex(data[var.name].values, var.values) 
+
+            result = result.apply(index_dataset, keep_attrs=True)
+
             def mask_not_enough(var):
-                nodata = getattr(var, 'nodata', -1)
-                var.values[not_enough[var.name.split('_')[0]]] = nodata
+                nodata = getattr(data[var.name], 'nodata', -1)
+                var.values[not_enough[var.name]] = nodata
+                var.attrs['nodata'] = nodata
                 return var
 
-            return result.apply(mask_not_enough, keep_attrs=True)
+            return result.apply(mask_not_enough, keep_attrs=True).rename({var: var + '_PC_' + str(q) for var in result.data_vars})
 
-        return xarray.merge(single(q) for q in self.qs)
+        result = xarray.merge(single(q) for q in self.qs)
+        result.attrs['crs'] = data.attrs['crs']
+        return result
 
     def measurements(self, input_measurements):
-        renamed = [Measurement(**{**m, 'name': key + '_PC_' + str(q)})
-                   for q in self.qs
-                   for key, m in input_measurements.items()]
+        renamed = dict()
+        for key, m in input_measurements.items():
+            for q in self.qs:
+                renamed[key + '_PC_' + str(q)] = Measurement(**{**m, 'name': key + '_PC_' + str(q)})
         return renamed
