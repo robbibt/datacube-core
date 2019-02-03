@@ -1,9 +1,10 @@
 import xarray
 import numpy as np
+import pandas as pd
 
 from collections import Sequence
 from functools import partial
-from .impl import VirtualProductException, Aggregation, Measurement
+from .impl import VirtualProductException, Aggregation, Measurement, DatasetPile
 from .stat_funcs import argpercentile, anynan, axisindex
 
 class Percentile(Aggregation):
@@ -27,6 +28,8 @@ class Percentile(Aggregation):
             self.qs = [q]
 
         self.minimum_valid_observations = minimum_valid_observations
+        self.reduction = {'time': 'year'}
+        self.time_stamp = None
 
     def compute(self, data):
         # calculate masks for pixel without enough data
@@ -50,6 +53,8 @@ class Percentile(Aggregation):
                 nodata = getattr(data[var.name], 'nodata', -1)
                 var.values[not_enough[var.name]] = nodata
                 var.attrs['nodata'] = nodata
+                var = var.expand_dims('time', axis=0)
+                var = var.assign_coords(time=self.time_stamp)
                 return var
 
             return result.apply(mask_not_enough, keep_attrs=True).rename({var: var + '_PC_' + str(q) for var in result.data_vars})
@@ -64,3 +69,17 @@ class Percentile(Aggregation):
             for q in self.qs:
                 renamed[key + '_PC_' + str(q)] = Measurement(**{**m, 'name': key + '_PC_' + str(q)})
         return renamed
+
+    def datasets(self, input_datasets):
+        output_datasets = [] 
+        for dim, unit in self.reduction.items():
+            if dim != 'time':
+                raise("Pencentile can only reduce in time at this stage")
+            if unit == 'year':
+                year = np.unique(pd.DatetimeIndex(input_datasets.pile.time.values).year).astype('str')
+                self.time_stamp = np.array(year, dtype='datetime64[ns]')
+                for year, ar in input_datasets.pile.groupby('time.year'):
+                    output_datasets.append({'aggregate':ar})
+                output_datasets = xarray.DataArray(np.array(output_datasets, dtype='object'), dims=['time'], coords={'time':self.time_stamp}) 
+
+        return DatasetPile(output_datasets, input_datasets.geobox, input_datasets.product_definitions)

@@ -159,6 +159,13 @@ class Aggregation(ABC):
         """
         pass
 
+    @abstractmethod
+    def datasets(self, input_datasets) ->  DatasetPile:
+        """
+        Take the input_datasets and construct the product datasets
+        """
+        pass
+
 class VirtualProduct(Mapping):
     """
     A recipe for combining loaded data from multiple datacube products.
@@ -417,7 +424,8 @@ class VirtualProduct(Mapping):
             return self._input.group(datasets, **search_terms)
 
         elif 'aggregate' in self:
-            return self._input.group(datasets, **search_terms)
+            input_datasets = self._input.group(datasets, **search_terms)
+            return self._aggregation.datasets(input_datasets)
 
         elif 'collate' in self:
             self._assert('collate' in datasets.pile and len(datasets.pile['collate']) == len(self._children),
@@ -442,6 +450,8 @@ class VirtualProduct(Mapping):
                                merge_dicts([grouped.product_definitions for grouped in groups]))
 
         elif 'juxtapose' in self:
+            print(len(self._children))
+            print(datasets.pile)
             self._assert('juxtapose' in datasets.pile and len(datasets.pile['juxtapose']) == len(self._children),
                          "invalid dataset pile")
 
@@ -488,7 +498,11 @@ class VirtualProduct(Mapping):
             return self._transformation.compute(self._input.fetch(grouped, **load_settings))
 
         elif 'aggregate' in self:
-            return self._aggregation.compute(self._input.fetch(grouped, **load_settings))
+            res = []
+            for e in grouped.split(dim='time'):
+                e.pile = e.pile.squeeze(dim='time', drop=True)
+                res += [self._aggregation.compute(self._input.fetch(e, **load_settings))]
+            return xarray.concat(res, dim='time')
 
         elif 'collate' in self:
             def is_from(source_index):
